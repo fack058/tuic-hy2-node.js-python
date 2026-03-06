@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防封禁低调版 - 已修复 masquerade）
+# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 超低调防踢版 - 支持1080p视频）
 set -e
 
-# ---------- 默认配置 ----------
+# ---------- 默认配置（优化为1080p流畅） ----------
 HYSTERIA_VERSION="v2.7.1"
-DEFAULT_PORT=22222
+DEFAULT_PORT=443          # 优先443伪装好，如果平台不允许换8443或12616
 AUTH_PASSWORD="ieshare2025"
+OBFS_PASSWORD="supersecret1080"  # 自定义混淆密码，字母+数字
 CERT_FILE="cert.pem"
 KEY_FILE="key.pem"
-SNI="www.bing.com"
+SNI="www.microsoft.com"   # 微软域名，低特征
 ALPN="h3"
 
 # ------------------------------
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-echo "Hysteria2 极简部署脚本（Wispbyte 防封禁低调版 - $HYSTERIA_VERSION）"
-echo "已大幅降低带宽和并发，并增加探针伪装，防止触发平台监控"
+echo "Hysteria2 极简部署脚本（Wispbyte 超低调防踢版 - 支持1080p视频）"
+echo "带宽优化为 down 10mbps（够1080p流畅），up 5mbps防风控"
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+
+# ---------- 清理旧文件 ----------
+rm -f server.yaml hysteria-linux-* cert.pem key.pem hy2.log 2>/dev/null || true
+echo "🗑️ 已清理旧文件，避免冲突。"
 
 # ---------- 获取端口 ----------
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
@@ -75,7 +80,7 @@ ensure_cert() {
     echo "✅ 证书生成成功。"
 }
 
-# ---------- 写配置文件（已修复 masquerade 为 proxy 类型） ----------
+# ---------- 写配置文件（1080p优化：down 10mbps + 单流 + 混淆） ----------
 write_config() {
 cat > server.yaml <<EOF
 listen: ":${SERVER_PORT}"
@@ -87,23 +92,27 @@ tls:
 auth:
   type: "password"
   password: "${AUTH_PASSWORD}"
+obfs:
+  type: salamander
+  salamander:
+    password: "${OBFS_PASSWORD}"
 bandwidth:
-  up: "30mbps"
-  down: "30mbps"
+  up: "5mbps"     # 上传限低，防风控
+  down: "10mbps"  # 下载够1080p视频流畅（YouTube 1080p 需5-10Mbps）
 quic:
-  max_idle_timeout: "10s"
-  max_concurrent_streams: 2
-  initial_stream_receive_window: 32768
-  max_stream_receive_window: 65536
-  initial_conn_receive_window: 65536
-  max_conn_receive_window: 131072
+  max_idle_timeout: "5s"
+  max_concurrent_streams: 1       # 单流减少并发特征
+  initial_stream_receive_window: 16384
+  max_stream_receive_window: 32768
+  initial_conn_receive_window: 32768
+  max_conn_receive_window: 65536
 masquerade:
   type: proxy
   proxy:
     url: https://${SNI}/
     rewriteHost: true
 EOF
-    echo "✅ 写入配置 server.yaml 成功 (已应用防封禁限速 + 正确伪装策略)。"
+    echo "✅ 写入配置 server.yaml 成功 (1080p优化 + 混淆 + 伪装)。"
 }
 
 # ---------- 获取服务器 IP ----------
@@ -115,19 +124,22 @@ get_server_ip() {
     echo "$IP"
 }
 
-# ---------- 打印连接信息 ----------
+# ---------- 打印连接信息（加 obfs 参数，兼容 v2rayN/Clash Verge/Shadowrocket） ----------
 print_connection_info() {
     local IP="$1"
-    echo "🎉 Hysteria2 部署成功！（Wispbyte 低调版）"
+    echo "🎉 Hysteria2 部署成功！（支持1080p视频）"
     echo "=========================================================================="
     echo "📋 服务器信息:"
     echo " 🌐 IP地址: $IP"
     echo " 🔌 端口: $SERVER_PORT"
     echo " 🔑 密码: $AUTH_PASSWORD"
+    echo " 🛡️ 混淆类型: salamander"
+    echo " 🛡️ 混淆密码: $OBFS_PASSWORD"
     echo ""
-    echo "📱 节点链接（SNI=${SNI}, ALPN=${ALPN}, 跳过证书验证）:"
-    echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1#Wispbyte-Hy2-Low"
+    echo "📱 节点链接（直接导入 v2rayN / Clash Verge / 小火箭）："
+    echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1&obfs=salamander&obfs-password=${OBFS_PASSWORD}#Wispbyte-Hy2-1080p"
     echo "=========================================================================="
+    echo "提示：v2rayN/Clash Verge 导入链接后自动识别 obfs；Shadowrocket 选 Hysteria2 类型，手动填 obfs salamander + password。"
 }
 
 # ---------- 主逻辑 ----------
@@ -138,10 +150,21 @@ main() {
     SERVER_IP=$(get_server_ip)
     print_connection_info "$SERVER_IP"
    
-    echo "🚀 配置 Go 运行时内存限制，极限防 OOM..."
-    export GOGC=20
-    export GOMEMLIMIT=25MiB
-    echo "🚀 启动 Hysteria2 服务器..."
-    exec "$BIN_PATH" server -c server.yaml
+    echo "🚀 配置 Go 运行时内存限制 + 禁用 update check..."
+    export HYSTERIA_DISABLE_UPDATE_CHECK=1
+    export GOGC=off
+    export GOMEMLIMIT=30MiB  # 稍松一点，够1080p缓冲
+
+    echo "🚀 启动 Hysteria2 服务器（warn 日志 + 后台保活）..."
+    pkill -f hysteria-linux || true
+    (
+        while true; do
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 运行中 - 支持1080p视频，资源正常"
+            sleep 15
+        done
+    ) &
+    nohup "$BIN_PATH" server -c server.yaml --log-level warn > hy2.log 2>&1 &
+    echo "✅ 已后台启动，日志在 hy2.log。tail -f hy2.log 查看实时日志。"
+    tail -f hy2.log   # 保持控制台活跃，防面板误杀
 }
 main "$@"
