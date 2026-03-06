@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防封禁低调版）
-
+# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防封禁低调版 - 已修复 masquerade）
 set -e
 
 # ---------- 默认配置 ----------
@@ -12,8 +11,8 @@ CERT_FILE="cert.pem"
 KEY_FILE="key.pem"
 SNI="www.bing.com"
 ALPN="h3"
-# ------------------------------
 
+# ------------------------------
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 echo "Hysteria2 极简部署脚本（Wispbyte 防封禁低调版 - $HYSTERIA_VERSION）"
 echo "已大幅降低带宽和并发，并增加探针伪装，防止触发平台监控"
@@ -43,13 +42,11 @@ arch_name() {
         echo ""
     fi
 }
-
 ARCH=$(arch_name)
 if [ -z "$ARCH" ]; then
   echo "❌ 无法识别 CPU 架构: $(uname -m)"
   exit 1
 fi
-
 BIN_NAME="hysteria-linux-${ARCH}"
 BIN_PATH="./${BIN_NAME}"
 
@@ -78,7 +75,7 @@ ensure_cert() {
     echo "✅ 证书生成成功。"
 }
 
-# ---------- 写配置文件 ----------
+# ---------- 写配置文件（已修复 masquerade 为 proxy 类型） ----------
 write_config() {
 cat > server.yaml <<EOF
 listen: ":${SERVER_PORT}"
@@ -91,11 +88,9 @@ auth:
   type: "password"
   password: "${AUTH_PASSWORD}"
 bandwidth:
-  # ⬇️ 核心优化：大幅降低标称带宽，防止流量突发被杀
   up: "30mbps"
   down: "30mbps"
 quic:
-  # ⬇️ 核心优化：进一步压缩缓冲区和并发，死保内存
   max_idle_timeout: "10s"
   max_concurrent_streams: 2
   initial_stream_receive_window: 32768
@@ -103,11 +98,12 @@ quic:
   initial_conn_receive_window: 65536
   max_conn_receive_window: 131072
 masquerade:
-  # ⬇️ 核心优化：增加伪装，遇到监控探针扫描时返回 404
-  type: string
-  string: "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+  type: proxy
+  proxy:
+    url: https://${SNI}/
+    rewriteHost: true
 EOF
-    echo "✅ 写入配置 server.yaml 成功 (已应用防封禁限速策略)。"
+    echo "✅ 写入配置 server.yaml 成功 (已应用防封禁限速 + 正确伪装策略)。"
 }
 
 # ---------- 获取服务器 IP ----------
@@ -125,9 +121,9 @@ print_connection_info() {
     echo "🎉 Hysteria2 部署成功！（Wispbyte 低调版）"
     echo "=========================================================================="
     echo "📋 服务器信息:"
-    echo "   🌐 IP地址: $IP"
-    echo "   🔌 端口: $SERVER_PORT"
-    echo "   🔑 密码: $AUTH_PASSWORD"
+    echo " 🌐 IP地址: $IP"
+    echo " 🔌 端口: $SERVER_PORT"
+    echo " 🔑 密码: $AUTH_PASSWORD"
     echo ""
     echo "📱 节点链接（SNI=${SNI}, ALPN=${ALPN}, 跳过证书验证）:"
     echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1#Wispbyte-Hy2-Low"
@@ -141,13 +137,11 @@ main() {
     write_config
     SERVER_IP=$(get_server_ip)
     print_connection_info "$SERVER_IP"
-    
+   
     echo "🚀 配置 Go 运行时内存限制，极限防 OOM..."
     export GOGC=20
     export GOMEMLIMIT=25MiB
-
     echo "🚀 启动 Hysteria2 服务器..."
     exec "$BIN_PATH" server -c server.yaml
 }
-
 main "$@"
