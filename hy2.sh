@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# Hysteria2 v2.7.1 极简部署脚本（适配 Wispbyte 等极小内存/免费面板环境）
+# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防封禁低调版）
 
 set -e
 
 # ---------- 默认配置 ----------
-HYSTERIA_VERSION="v2.7.1"  # 已经为你更新到新版
-DEFAULT_PORT=22222         # 默认端口 (如果未提供参数或环境变量)
-AUTH_PASSWORD="ieshare2025"   # 建议修改为复杂密码
+HYSTERIA_VERSION="v2.7.1"
+DEFAULT_PORT=22222
+AUTH_PASSWORD="ieshare2025"
 CERT_FILE="cert.pem"
 KEY_FILE="key.pem"
 SNI="www.bing.com"
@@ -15,12 +15,11 @@ ALPN="h3"
 # ------------------------------
 
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-echo "Hysteria2 极简部署脚本（Wispbyte 极限优化版 - $HYSTERIA_VERSION）"
-echo "支持命令行传参或自动识别面板 \$PORT 环境变量"
+echo "Hysteria2 极简部署脚本（Wispbyte 防封禁低调版 - $HYSTERIA_VERSION）"
+echo "已大幅降低带宽和并发，并增加探针伪装，防止触发平台监控"
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 
 # ---------- 获取端口 ----------
-# 优先级: 命令行参数 > 平台分配的 $PORT 变量 > 默认端口
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
     SERVER_PORT="$1"
     echo "✅ 使用命令行指定端口: $SERVER_PORT"
@@ -74,7 +73,6 @@ ensure_cert() {
         return
     fi
     echo "🔑 生成自签证书（prime256v1）以节省性能..."
-    # 增加 2>/dev/null 屏蔽大段多余输出，保持面板整洁
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=${SNI}" 2>/dev/null
     echo "✅ 证书生成成功。"
@@ -93,23 +91,27 @@ auth:
   type: "password"
   password: "${AUTH_PASSWORD}"
 bandwidth:
-  up: "200mbps"
-  down: "200mbps"
+  # ⬇️ 核心优化：大幅降低标称带宽，防止流量突发被杀
+  up: "30mbps"
+  down: "30mbps"
 quic:
-  # 针对小内存环境优化的缓冲区大小
+  # ⬇️ 核心优化：进一步压缩缓冲区和并发，死保内存
   max_idle_timeout: "10s"
-  max_concurrent_streams: 4
-  initial_stream_receive_window: 65536
-  max_stream_receive_window: 131072
-  initial_conn_receive_window: 131072
-  max_conn_receive_window: 262144
+  max_concurrent_streams: 2
+  initial_stream_receive_window: 32768
+  max_stream_receive_window: 65536
+  initial_conn_receive_window: 65536
+  max_conn_receive_window: 131072
+masquerade:
+  # ⬇️ 核心优化：增加伪装，遇到监控探针扫描时返回 404
+  type: string
+  string: "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
 EOF
-    echo "✅ 写入配置 server.yaml 成功。"
+    echo "✅ 写入配置 server.yaml 成功 (已应用防封禁限速策略)。"
 }
 
 # ---------- 获取服务器 IP ----------
 get_server_ip() {
-    # 增加防风控和防超时策略，多 API 轮询
     IP=$(curl -s --max-time 5 https://api.ipify.org || \
          curl -s --max-time 5 https://icanhazip.com || \
          curl -s --max-time 5 https://ifconfig.me || \
@@ -120,7 +122,7 @@ get_server_ip() {
 # ---------- 打印连接信息 ----------
 print_connection_info() {
     local IP="$1"
-    echo "🎉 Hysteria2 部署成功！（Wispbyte 优化版）"
+    echo "🎉 Hysteria2 部署成功！（Wispbyte 低调版）"
     echo "=========================================================================="
     echo "📋 服务器信息:"
     echo "   🌐 IP地址: $IP"
@@ -128,7 +130,7 @@ print_connection_info() {
     echo "   🔑 密码: $AUTH_PASSWORD"
     echo ""
     echo "📱 节点链接（SNI=${SNI}, ALPN=${ALPN}, 跳过证书验证）:"
-    echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1#Wispbyte-Hy2"
+    echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1#Wispbyte-Hy2-Low"
     echo "=========================================================================="
 }
 
@@ -140,9 +142,9 @@ main() {
     SERVER_IP=$(get_server_ip)
     print_connection_info "$SERVER_IP"
     
-    echo "🚀 配置 Go 运行时内存限制，防止 OOM 被杀..."
-    export GOGC=25
-    export GOMEMLIMIT=30MiB
+    echo "🚀 配置 Go 运行时内存限制，极限防 OOM..."
+    export GOGC=20
+    export GOMEMLIMIT=25MiB
 
     echo "🚀 启动 Hysteria2 服务器..."
     exec "$BIN_PATH" server -c server.yaml
