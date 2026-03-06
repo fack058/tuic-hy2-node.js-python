@@ -1,43 +1,40 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 超低调防踢版 - 支持1080p视频）
+# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防踢优化版 - 防 SIGINT + 减少 warn）
 set -e
 
-# ---------- 默认配置（优化为1080p流畅） ----------
+# ---------- 默认配置（优化防 crash） ----------
 HYSTERIA_VERSION="v2.7.1"
-DEFAULT_PORT=443          # 优先443伪装好，如果平台不允许换8443或12616
-AUTH_PASSWORD="ieshare2025"
-OBFS_PASSWORD="supersecret1080"  # 自定义混淆密码，字母+数字
+DEFAULT_PORT=443
+AUTH_PASSWORD="ieshare2035"
+OBFS_PASSWORD="supersecret1080"
 CERT_FILE="cert.pem"
 KEY_FILE="key.pem"
-SNI="www.microsoft.com"   # 微软域名，低特征
+SNI="www.microsoft.com"
 ALPN="h3"
 
-# ------------------------------
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-echo "Hysteria2 极简部署脚本（Wispbyte 超低调防踢版 - 支持1080p视频）"
-echo "带宽优化为 down 10mbps（够1080p流畅），up 5mbps防风控"
+echo "Hysteria2 优化部署脚本（防 SIGINT + 减少 TCP warn + 支持1080p）"
 echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 
-# ---------- 清理旧文件 ----------
+# 清理旧文件
 rm -f server.yaml hysteria-linux-* cert.pem key.pem hy2.log 2>/dev/null || true
-echo "🗑️ 已清理旧文件，避免冲突。"
+echo "🗑️ 已清理。"
 
-# ---------- 获取端口 ----------
+# 获取端口
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
     SERVER_PORT="$1"
-    echo "✅ 使用命令行指定端口: $SERVER_PORT"
+    echo "✅ 端口: $SERVER_PORT"
 elif [[ -n "$PORT" ]]; then
     SERVER_PORT="$PORT"
-    echo "✅ 自动识别到平台分配端口: $SERVER_PORT"
+    echo "✅ 平台端口: $SERVER_PORT"
 else
     SERVER_PORT="${SERVER_PORT:-$DEFAULT_PORT}"
-    echo "⚙️ 未提供端口参数，使用默认端口: $SERVER_PORT"
+    echo "⚙️ 默认端口: $SERVER_PORT"
 fi
 
-# ---------- 检测架构 ----------
+# 检测架构
 arch_name() {
-    local machine
     machine=$(uname -m | tr '[:upper:]' '[:lower:]')
     if [[ "$machine" == *"arm64"* ]] || [[ "$machine" == *"aarch64"* ]]; then
         echo "arm64"
@@ -49,38 +46,37 @@ arch_name() {
 }
 ARCH=$(arch_name)
 if [ -z "$ARCH" ]; then
-  echo "❌ 无法识别 CPU 架构: $(uname -m)"
+  echo "❌ 架构错误。"
   exit 1
 fi
 BIN_NAME="hysteria-linux-${ARCH}"
 BIN_PATH="./${BIN_NAME}"
 
-# ---------- 下载二进制 ----------
+# 下载二进制
 download_binary() {
     if [ -f "$BIN_PATH" ]; then
-        echo "✅ 二进制已存在，跳过下载。"
+        echo "✅ 二进制存在。"
         return
     fi
     URL="https://github.com/apernet/hysteria/releases/download/app/${HYSTERIA_VERSION}/${BIN_NAME}"
-    echo "⏳ 下载: $URL"
-    curl -sL --retry 3 --connect-timeout 15 -o "$BIN_PATH" "$URL"
+    echo "⏳ 下载 $URL"
+    curl -sL -o "$BIN_PATH" "$URL"
     chmod +x "$BIN_PATH"
-    echo "✅ 下载完成并设置可执行: $BIN_PATH"
+    echo "✅ 下载完成。"
 }
 
-# ---------- 生成证书 ----------
+# 生成证书
 ensure_cert() {
     if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-        echo "✅ 发现证书，使用现有 cert/key。"
+        echo "✅ 证书存在。"
         return
     fi
-    echo "🔑 生成自签证书（prime256v1）以节省性能..."
-    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=${SNI}" 2>/dev/null
-    echo "✅ 证书生成成功。"
+    echo "🔑 生成证书..."
+    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=${SNI}" 2>/dev/null
+    echo "✅ 生成成功。"
 }
 
-# ---------- 写配置文件（1080p优化：down 10mbps + 单流 + 混淆） ----------
+# 写配置（减少 warn：长 idle 超时 + keepalive）
 write_config() {
 cat > server.yaml <<EOF
 listen: ":${SERVER_PORT}"
@@ -97,11 +93,12 @@ obfs:
   salamander:
     password: "${OBFS_PASSWORD}"
 bandwidth:
-  up: "5mbps"     # 上传限低，防风控
-  down: "10mbps"  # 下载够1080p视频流畅（YouTube 1080p 需5-10Mbps）
+  up: "3mbps"
+  down: "5mbps"
 quic:
-  max_idle_timeout: "5s"
-  max_concurrent_streams: 1       # 单流减少并发特征
+  max_idle_timeout: "30s"
+  keepAlivePeriod: "10s"
+  max_concurrent_streams: 1
   initial_stream_receive_window: 16384
   max_stream_receive_window: 32768
   initial_conn_receive_window: 32768
@@ -112,37 +109,26 @@ masquerade:
     url: https://${SNI}/
     rewriteHost: true
 EOF
-    echo "✅ 写入配置 server.yaml 成功 (1080p优化 + 混淆 + 伪装)。"
+    echo "✅ 配置写入（减少 warn）。"
 }
 
-# ---------- 获取服务器 IP ----------
+# 获取 IP
 get_server_ip() {
-    IP=$(curl -s --max-time 5 https://api.ipify.org || \
-         curl -s --max-time 5 https://icanhazip.com || \
-         curl -s --max-time 5 https://ifconfig.me || \
-         echo "YOUR_SERVER_IP")
+    IP=$(curl -s https://api.ipify.org || curl -s https://icanhazip.com || curl -s https://ifconfig.me || echo "YOUR_SERVER_IP")
     echo "$IP"
 }
 
-# ---------- 打印连接信息（加 obfs 参数，兼容 v2rayN/Clash Verge/Shadowrocket） ----------
+# 打印信息
 print_connection_info() {
     local IP="$1"
-    echo "🎉 Hysteria2 部署成功！（支持1080p视频）"
+    echo "🎉 部署成功！"
     echo "=========================================================================="
-    echo "📋 服务器信息:"
-    echo " 🌐 IP地址: $IP"
-    echo " 🔌 端口: $SERVER_PORT"
-    echo " 🔑 密码: $AUTH_PASSWORD"
-    echo " 🛡️ 混淆类型: salamander"
-    echo " 🛡️ 混淆密码: $OBFS_PASSWORD"
-    echo ""
-    echo "📱 节点链接（直接导入 v2rayN / Clash Verge / 小火箭）："
-    echo "hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1&obfs=salamander&obfs-password=${OBFS_PASSWORD}#Wispbyte-Hy2-1080p"
+    echo "IP: $IP | 端口: $SERVER_PORT | 密码: $AUTH_PASSWORD | obfs: salamander | obfs-password: $OBFS_PASSWORD"
+    echo "链接: hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1&obfs=salamander&obfs-password=${OBFS_PASSWORD}#Optimized-Hy2"
     echo "=========================================================================="
-    echo "提示：v2rayN/Clash Verge 导入链接后自动识别 obfs；Shadowrocket 选 Hysteria2 类型，手动填 obfs salamander + password。"
 }
 
-# ---------- 主逻辑 ----------
+# 主逻辑
 main() {
     download_binary
     ensure_cert
@@ -150,21 +136,22 @@ main() {
     SERVER_IP=$(get_server_ip)
     print_connection_info "$SERVER_IP"
    
-    echo "🚀 配置 Go 运行时内存限制 + 禁用 update check..."
+    echo "🚀 设置环境..."
     export HYSTERIA_DISABLE_UPDATE_CHECK=1
     export GOGC=off
-    export GOMEMLIMIT=30MiB  # 稍松一点，够1080p缓冲
+    export GOMEMLIMIT=40MiB  # 稍松，防 OOM
 
-    echo "🚀 启动 Hysteria2 服务器（warn 日志 + 后台保活）..."
+    echo "🚀 启动（防 SIGINT + 保活）..."
     pkill -f hysteria-linux || true
+    trap '' INT  # 忽略 SIGINT
     (
         while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 运行中 - 支持1080p视频，资源正常"
-            sleep 15
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 正常 - 低流量模式"
+            sleep 10
         done
     ) &
-    nohup "$BIN_PATH" server -c server.yaml --log-level warn > hy2.log 2>&1 &
-    echo "✅ 已后台启动，日志在 hy2.log。tail -f hy2.log 查看实时日志。"
-    tail -f hy2.log   # 保持控制台活跃，防面板误杀
+    nohup "$BIN_PATH" server -c server.yaml --log-level error > hy2.log 2>&1 &
+    echo "✅ 后台启动（error 日志）。tail -f hy2.log 查看。"
+    tail -f hy2.log
 }
 main "$@"
