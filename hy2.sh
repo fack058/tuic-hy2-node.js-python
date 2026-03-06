@@ -1,157 +1,98 @@
 #!/usr/bin/env bash
-# -*- coding: utf-8 -*-
-# Hysteria2 v2.7.1 极简部署脚本（Wispbyte 防踢优化版 - 防 SIGINT + 减少 warn）
+# Hysteria2 一键部署 + 保活 + 每3分钟强制重启脚本
+# 保存为 hy2.sh 后：chmod +x hy2.sh && ./hy2.sh 12616
+
 set -e
 
-# ---------- 默认配置（优化防 crash） ----------
-HYSTERIA_VERSION="v2.7.1"
-DEFAULT_PORT=443
-AUTH_PASSWORD="ieshare2035"
-OBFS_PASSWORD="supersecret1080"
-CERT_FILE="cert.pem"
-KEY_FILE="key.pem"
-SNI="www.microsoft.com"
-ALPN="h3"
+# ==================== 配置 ====================
+PORT=${1:-12616}                       # 默认端口，可命令行指定
+PASSWORD="ieshare2035"                 # 认证密码
+OBFS_PASS="supersecret1080"            # salamander 混淆密码
+SNI="www.microsoft.com"                # 伪装域名
 
-echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-echo "Hysteria2 优化部署脚本（防 SIGINT + 减少 TCP warn + 支持1080p）"
-echo "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+# ==============================================
 
-# 清理旧文件
+echo "================================================================"
+echo "开始部署 Hysteria2 (端口 $PORT)"
+echo "================================================================"
+
+# 清理旧文件和进程
 rm -f server.yaml hysteria-linux-* cert.pem key.pem hy2.log 2>/dev/null || true
-echo "🗑️ 已清理。"
+pkill -f hysteria-linux 2>/dev/null || true
 
-# 获取端口
-if [[ $# -ge 1 && -n "${1:-}" ]]; then
-    SERVER_PORT="$1"
-    echo "✅ 端口: $SERVER_PORT"
-elif [[ -n "$PORT" ]]; then
-    SERVER_PORT="$PORT"
-    echo "✅ 平台端口: $SERVER_PORT"
-else
-    SERVER_PORT="${SERVER_PORT:-$DEFAULT_PORT}"
-    echo "⚙️ 默认端口: $SERVER_PORT"
-fi
+# 下载最新 hysteria (amd64/arm64 自适应)
+ARCH=$(uname -m | grep -q "aarch64\|arm64" && echo "arm64" || echo "amd64")
+BIN="hysteria-linux-$ARCH"
+curl -L -o "$BIN" "https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN"
+chmod +x "$BIN"
 
-# 检测架构
-arch_name() {
-    machine=$(uname -m | tr '[:upper:]' '[:lower:]')
-    if [[ "$machine" == *"arm64"* ]] || [[ "$machine" == *"aarch64"* ]]; then
-        echo "arm64"
-    elif [[ "$machine" == *"x86_64"* ]] || [[ "$machine" == *"amd64"* ]]; then
-        echo "amd64"
-    else
-        echo ""
-    fi
-}
-ARCH=$(arch_name)
-if [ -z "$ARCH" ]; then
-  echo "❌ 架构错误。"
-  exit 1
-fi
-BIN_NAME="hysteria-linux-${ARCH}"
-BIN_PATH="./${BIN_NAME}"
+# 生成自签证书
+openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -days 3650 -keyout key.pem -out cert.pem -subj "/CN=$SNI" 2>/dev/null
 
-# 下载二进制
-download_binary() {
-    if [ -f "$BIN_PATH" ]; then
-        echo "✅ 二进制存在。"
-        return
-    fi
-    URL="https://github.com/apernet/hysteria/releases/download/app/${HYSTERIA_VERSION}/${BIN_NAME}"
-    echo "⏳ 下载 $URL"
-    curl -sL -o "$BIN_PATH" "$URL"
-    chmod +x "$BIN_PATH"
-    echo "✅ 下载完成。"
-}
-
-# 生成证书
-ensure_cert() {
-    if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-        echo "✅ 证书存在。"
-        return
-    fi
-    echo "🔑 生成证书..."
-    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=${SNI}" 2>/dev/null
-    echo "✅ 生成成功。"
-}
-
-# 写配置（减少 warn：长 idle 超时 + keepalive）
-write_config() {
+# 生成 server.yaml
 cat > server.yaml <<EOF
-listen: ":${SERVER_PORT}"
+listen: ":$PORT"
 tls:
-  cert: "$(pwd)/${CERT_FILE}"
-  key: "$(pwd)/${KEY_FILE}"
+  cert: "$(pwd)/cert.pem"
+  key: "$(pwd)/key.pem"
   alpn:
-    - "${ALPN}"
+    - "h3"
 auth:
   type: "password"
-  password: "${AUTH_PASSWORD}"
+  password: "$PASSWORD"
 obfs:
   type: salamander
   salamander:
-    password: "${OBFS_PASSWORD}"
+    password: "$OBFS_PASS"
 bandwidth:
   up: "3mbps"
   down: "5mbps"
 quic:
-  max_idle_timeout: "30s"
-  keepAlivePeriod: "10s"
+  max_idle_timeout: "60s"
+  keepAlivePeriod: "20s"
   max_concurrent_streams: 1
-  initial_stream_receive_window: 16384
-  max_stream_receive_window: 32768
-  initial_conn_receive_window: 32768
-  max_conn_receive_window: 65536
 masquerade:
   type: proxy
   proxy:
-    url: https://${SNI}/
+    url: https://$SNI/
     rewriteHost: true
 EOF
-    echo "✅ 配置写入（减少 warn）。"
-}
 
-# 获取 IP
-get_server_ip() {
-    IP=$(curl -s https://api.ipify.org || curl -s https://icanhazip.com || curl -s https://ifconfig.me || echo "YOUR_SERVER_IP")
-    echo "$IP"
-}
+# 输出节点链接
+IP=$(curl -s ifconfig.me || curl -s icanhazip.com || echo "YOUR_IP")
+echo ""
+echo "节点链接："
+echo "hysteria2://${PASSWORD}@${IP}:${PORT}?sni=${SNI}&alpn=h3&insecure=1&obfs=salamander&obfs-password=${OBFS_PASS}#Hy2-12616"
+echo ""
 
-# 打印信息
-print_connection_info() {
-    local IP="$1"
-    echo "🎉 部署成功！"
-    echo "=========================================================================="
-    echo "IP: $IP | 端口: $SERVER_PORT | 密码: $AUTH_PASSWORD | obfs: salamander | obfs-password: $OBFS_PASSWORD"
-    echo "链接: hysteria2://${AUTH_PASSWORD}@${IP}:${SERVER_PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1&obfs=salamander&obfs-password=${OBFS_PASSWORD}#Optimized-Hy2"
-    echo "=========================================================================="
-}
+# ==================== 守护循环 ====================
+echo "启动守护模式：每10秒保活，每180秒强制重启"
 
-# 主逻辑
-main() {
-    download_binary
-    ensure_cert
-    write_config
-    SERVER_IP=$(get_server_ip)
-    print_connection_info "$SERVER_IP"
-   
-    echo "🚀 设置环境..."
-    export HYSTERIA_DISABLE_UPDATE_CHECK=1
-    export GOGC=off
-    export GOMEMLIMIT=40MiB  # 稍松，防 OOM
+while true; do
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 启动 Hysteria2..."
 
-    echo "🚀 启动（防 SIGINT + 保活）..."
-    pkill -f hysteria-linux || true
-    trap '' INT  # 忽略 SIGINT
-    (
-        while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 正常 - 低流量模式"
-            sleep 10
-        done
-    ) &
-    nohup "$BIN_PATH" server -c server.yaml --log-level error > hy2.log 2>&1 &
-    echo "✅ 后台启动（error 日志）。tail -f hy2.log 查看。"
-    tail -f hy2.log
-}
-main "$@"
+    # 启动 hysteria
+    env HYSTERIA_DISABLE_UPDATE_CHECK=1 GOGC=off GOMEMLIMIT=40MiB \
+        ./$BIN server -c server.yaml --log-level error &
+    PID=$!
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] PID: $PID"
+
+    # 保活 + 定时重启循环
+    for ((i=0; i<180; i+=10)); do
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 运行中 - 低流量模式"
+        sleep 10
+
+        # 检查进程是否还活着
+        if ! kill -0 $PID 2>/dev/null; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 进程已退出，立即重启..."
+            break
+        fi
+    done
+
+    # 强制杀掉旧进程
+    kill $PID 2>/dev/null || true
+    pkill -f "$BIN" 2>/dev/null || true
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 强制重启完成"
+done
