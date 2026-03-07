@@ -1,32 +1,31 @@
 #!/usr/bin/env bash
-# Hysteria2 一键部署 + 保活 + 每3分钟强制重启脚本
-# 保存为 hy2.sh 后：chmod +x hy2.sh && ./hy2.sh 12616
+# Hysteria2 一键部署 + 保活 + 自动重启脚本（Wispbyte 优化版）
+# 使用：chmod +x hy2.sh && ./hy2.sh 12721
 
 set -e
 
 # ==================== 配置 ====================
-PORT=${1:-12616}                       # 默认端口，可命令行指定
-PASSWORD="ieshare2035"                 # 认证密码
-OBFS_PASS="supersecret1080"            # salamander 混淆密码
-SNI="www.microsoft.com"                # 伪装域名
-
-# ==============================================
+PORT=${1:-12721}                       # 你的新端口
+PASSWORD="123456"
+OBFS_PASS="123456"
+SNI="www.microsoft.com"
+ALPN="h3"
 
 echo "================================================================"
-echo "开始部署 Hysteria2 (端口 $PORT)"
+echo "Hysteria2 部署 + 保活脚本（Wispbyte 优化） - 端口 $PORT"
 echo "================================================================"
 
-# 清理旧文件和进程
+# 清理
 rm -f server.yaml hysteria-linux-* cert.pem key.pem hy2.log 2>/dev/null || true
 pkill -f hysteria-linux 2>/dev/null || true
 
-# 下载最新 hysteria (amd64/arm64 自适应)
+# 下载（amd64/arm64 自适应）
 ARCH=$(uname -m | grep -q "aarch64\|arm64" && echo "arm64" || echo "amd64")
 BIN="hysteria-linux-$ARCH"
 curl -L -o "$BIN" "https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN"
 chmod +x "$BIN"
 
-# 生成自签证书
+# 生成证书
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -days 3650 -keyout key.pem -out cert.pem -subj "/CN=$SNI" 2>/dev/null
 
@@ -37,7 +36,7 @@ tls:
   cert: "$(pwd)/cert.pem"
   key: "$(pwd)/key.pem"
   alpn:
-    - "h3"
+    - "$ALPN"
 auth:
   type: "password"
   password: "$PASSWORD"
@@ -63,36 +62,27 @@ EOF
 IP=$(curl -s ifconfig.me || curl -s icanhazip.com || echo "YOUR_IP")
 echo ""
 echo "节点链接："
-echo "hysteria2://${PASSWORD}@${IP}:${PORT}?sni=${SNI}&alpn=h3&insecure=1&obfs=salamander&obfs-password=${OBFS_PASS}#Hy2-12616"
+echo "hysteria2://${PASSWORD}@${IP}:${PORT}?sni=${SNI}&alpn=${ALPN}&insecure=1&obfs=salamander&obfs-password=${OBFS_PASS}#Hy2-12721"
 echo ""
 
-# ==================== 守护循环 ====================
-echo "启动守护模式：每10秒保活，每180秒强制重启"
+# ==================== 守护模式 ====================
+echo "启动守护模式：每10秒保活，进程退出立即重启"
+
+# 忽略 SIGINT（防平台误发中断）
+trap '' INT
 
 while true; do
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] 启动 Hysteria2..."
 
-    # 启动 hysteria
+    # 前台运行 hysteria（必须前台！不能加 &）
     env HYSTERIA_DISABLE_UPDATE_CHECK=1 GOGC=off GOMEMLIMIT=40MiB \
-        ./$BIN server -c server.yaml --log-level error &
-    PID=$!
+        ./$BIN server -c server.yaml --log-level error
 
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] PID: $PID"
+    # 如果进程退出（被杀或异常），立即重启
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 进程退出 (code $?)，等待 5 秒后重启..."
+    sleep 5
 
-    # 保活 + 定时重启循环
-    for ((i=0; i<180; i+=10)); do
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 运行中 - 低流量模式"
-        sleep 10
-
-        # 检查进程是否还活着
-        if ! kill -0 $PID 2>/dev/null; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 进程已退出，立即重启..."
-            break
-        fi
-    done
-
-    # 强制杀掉旧进程
-    kill $PID 2>/dev/null || true
-    pkill -f "$BIN" 2>/dev/null || true
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 强制重启完成"
+    # 保活输出（在循环里每10秒输出一次）
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Hy2 运行中 - 低流量模式"
+    sleep 5  # 总间隔约10秒
 done
