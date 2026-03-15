@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Hysteria2 一键部署 + Systemd 后台运行 + 极致安全防封版 (Woiden IPv6)
-# 使用：chmod +x hy2.sh && ./hy2.sh
+# Hysteria2 一键部署 + Systemd 后台运行 + 极致安全防封版 (纯 IPv6 完美适配)
 
 set -e
+
+# 获取当前工作目录，防止路径错乱
+WORKDIR=$(pwd)
 
 # ==================== 基础配置 ====================
 PORT=${1:-12616}
@@ -28,13 +30,15 @@ echo "================================================================"
 rm -f server.yaml hysteria-linux-* cert.pem key.pem hy2.log 2>/dev/null || true
 pkill -f hysteria-linux 2>/dev/null || true
 
-# 下载主程序
+# 下载主程序 (使用极速且支持 IPv6 的 ghfast.top 镜像)
 ARCH=$(uname -m | grep -q "aarch64\|arm64" && echo "arm64" || echo "amd64")
 BIN="hysteria-linux-$ARCH"
-curl -L -o "$BIN" "https://ghfast.top/https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN" || { echo "下载失败"; exit 1; }
+echo "正在下载 Hysteria2 核心..."
+curl -L -o "$BIN" "https://ghfast.top/https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN" || { echo "下载失败，请检查网络或稍后重试"; exit 1; }
 chmod +x "$BIN"
 
 # 生成自签名证书
+echo "正在签发本地证书..."
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -days 3650 -keyout key.pem -out cert.pem -subj "/CN=$SNI" 2>/dev/null
 
@@ -42,8 +46,8 @@ openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
 cat > server.yaml <<EOF
 listen: ":$PORT"
 tls:
-  cert: "$(pwd)/cert.pem"
-  key: "$(pwd)/key.pem"
+  cert: "$WORKDIR/cert.pem"
+  key: "$WORKDIR/key.pem"
   alpn:
     - "$ALPN"
 auth:
@@ -67,8 +71,8 @@ masquerade:
     rewriteHost: true
 EOF
 
-# 获取 IP 并处理纯 IPv6 的方括号问题
-IP=$(curl -6 -s ifconfig.co || curl -s ifconfig.me || echo "YOUR_IP")
+# 获取 IP 并处理纯 IPv6 的方括号问题 (增加多个查询接口防挂)
+IP=$(curl -s -6 ip.sb || curl -s -6 icanhazip.com || curl -s -6 ifconfig.co || echo "YOUR_IP")
 if [[ "$IP" == *":"* ]]; then
     URL_IP="[$IP]"
 else
@@ -92,11 +96,11 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=$(pwd)
+WorkingDirectory=$WORKDIR
 Environment="HYSTERIA_DISABLE_UPDATE_CHECK=1"
 Environment="GOGC=off"
 Environment="GOMEMLIMIT=40MiB"
-ExecStart=$(pwd)/$BIN server -c $(pwd)/server.yaml --log-level error
+ExecStart=$WORKDIR/$BIN server -c $WORKDIR/server.yaml --log-level error
 Restart=on-failure
 RestartSec=3
 
