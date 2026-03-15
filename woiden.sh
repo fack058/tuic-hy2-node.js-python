@@ -31,7 +31,7 @@ pkill -f hysteria-linux 2>/dev/null || true
 # 下载主程序
 ARCH=$(uname -m | grep -q "aarch64\|arm64" && echo "arm64" || echo "amd64")
 BIN="hysteria-linux-$ARCH"
-curl -L -o "$BIN" "https://ghp.ci/https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN" || { echo "下载失败"; exit 1; }
+curl -L -o "$BIN" "https://ghfast.top/https://github.com/apernet/hysteria/releases/download/app/v2.7.1/$BIN" || { echo "下载失败"; exit 1; }
 chmod +x "$BIN"
 
 # 生成自签名证书
